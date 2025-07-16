@@ -8,6 +8,15 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Session configuration
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || "your-secret-key",
+    resave: false,
+    saveUninitialized: false,
+    cookie: { secure: false }, // Set to true in production with HTTPS
+  })
+);
 
 app.use(express.json());
 
