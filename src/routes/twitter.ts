@@ -108,14 +108,16 @@ router.get("/auth/login", (req, res): any => {
   const codeChallenge = generateCodeChallenge(codeVerifier);
   const state = crypto.randomBytes(16).toString("hex");
 
-  // Store codeVerifier and state in session
+  // Store codeVerifier and state in the session
   req.session.codeVerifier = codeVerifier;
   req.session.state = state;
+
+  console.log("Stored state in session:", req.session.state);  // Debugging log
 
   const authUrl = new URL("https://twitter.com/i/oauth2/authorize");
   authUrl.searchParams.set("response_type", "code");
   authUrl.searchParams.set("client_id", CLIENT_ID);
-  authUrl.searchParams.set("redirect_uri", CALLBACK_URL);  
+  authUrl.searchParams.set("redirect_uri", CALLBACK_URL);
   authUrl.searchParams.set(
     "scope",
     "tweet.read tweet.write users.read follows.read follows.write like.read like.write"
@@ -134,13 +136,12 @@ router.get("/auth/login", (req, res): any => {
 router.get("/auth/callback", async (req, res): Promise<any> => {
   const { code, state } = req.query;
 
-  // Log the received params for debugging
+  // Log received parameters for debugging
   console.log("Received code:", code);
   console.log("Received state:", state);
   console.log("Session state:", req.session.state);
-  console.log("Session codeVerifier:", req.session.codeVerifier);
 
-  // Ensure state matches the one we sent
+  // Ensure the state received in the callback matches the session state
   if (!code || !state || state !== req.session.state) {
     return res.status(400).json({ error: "Invalid callback parameters: Mismatched state" });
   }
@@ -163,17 +164,12 @@ router.get("/auth/callback", async (req, res): Promise<any> => {
       redirectUri: CALLBACK_URL,
     });
 
-    console.log('Access Token:', accessToken);
-    console.log('Refresh Token:', refreshToken);
-
     if (!accessToken || !refreshToken) {
       return res.status(500).json({ error: "Failed to retrieve tokens" });
     }
 
     const userClient = new TwitterApi(accessToken);
     const { data: userInfo } = await userClient.v2.me();
-
-    console.log("User Info:", userInfo);
 
     const tokens = {
       accessToken: accessToken,
