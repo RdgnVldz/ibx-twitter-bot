@@ -108,8 +108,8 @@ router.get("/auth/login", (req, res): any => {
   const codeChallenge = generateCodeChallenge(codeVerifier);
   const state = crypto.randomBytes(16).toString("hex");
 
-  req.session.codeVerifier = codeVerifier;
-  req.session.state = state;
+  req.session.codeVerifier = codeVerifier;  // Store codeVerifier in session
+  req.session.state = state;  // Store state in session
 
   const authUrl = new URL("https://twitter.com/i/oauth2/authorize");
   authUrl.searchParams.set("response_type", "code");
@@ -123,15 +123,6 @@ router.get("/auth/login", (req, res): any => {
   authUrl.searchParams.set("code_challenge", codeChallenge);
   authUrl.searchParams.set("code_challenge_method", "S256");
 
-  if (req.query.json === "true") {
-    return res.json({
-      authUrl: authUrl.toString(),
-      state,
-      message: "Visit this URL in your browser to authenticate",
-    });
-  }
-  console.log(authUrl.toString())
-
   res.redirect(authUrl.toString());
 });
 
@@ -141,41 +132,41 @@ router.get("/auth/callback", async (req, res): Promise<any> => {
 
   // Ensure state matches the one we sent
   if (!code || !state || state !== req.session.state) {
-    return res.status(400).json({ error: "Invalid callback parameters" });
+    return res.status(400).json({ error: "Invalid callback parameters: Mismatched state" });
+  }
+
+  // Ensure codeVerifier exists in the session
+  const codeVerifier = req.session.codeVerifier;
+  if (!codeVerifier) {
+    return res.status(400).json({ error: "Code Verifier not found in session" });
   }
 
   try {
-    console.log("OAuth callback received with code:", code);
-    
     const client = new TwitterApi({
       clientId: CLIENT_ID,
       clientSecret: CLIENT_SECRET,
     });
 
-    // Log the request to see what code is being sent
-    console.log('Requesting access token from Twitter with code:', code);
+    console.log("Received OAuth code:", code);
+    console.log("Using codeVerifier from session:", codeVerifier);
 
-    // Get the access token and refresh token
+    // Exchange the authorization code for the access token
     const { accessToken, refreshToken } = await client.loginWithOAuth2({
       code: code as string,
-      codeVerifier: req.session.codeVerifier!,
+      codeVerifier: codeVerifier,  // Ensure the correct codeVerifier is used
       redirectUri: CALLBACK_URL,
     });
 
-    // Log access and refresh tokens
     console.log('Access Token:', accessToken);
     console.log('Refresh Token:', refreshToken);
 
-    // If tokens are missing, log the error
     if (!accessToken || !refreshToken) {
-      console.error("Failed to retrieve tokens: Access token or refresh token is missing");
       return res.status(500).json({ error: "Failed to retrieve tokens" });
     }
 
     const userClient = new TwitterApi(accessToken);
     const { data: userInfo } = await userClient.v2.me();
 
-    // Log user information
     console.log('User Info:', userInfo);
 
     const tokens = {
@@ -188,10 +179,8 @@ router.get("/auth/callback", async (req, res): Promise<any> => {
     console.log('Saving tokens to tokens.json:', tokens);
     fs.writeFileSync(TOKENS_FILE_PATH, JSON.stringify(tokens), "utf-8");
 
-    // Store user ID in session for future requests
     req.session.loggedUserId = userInfo.id;
 
-    // Send success response
     res.json({
       success: true,
       message: "Authentication successful",
@@ -200,11 +189,10 @@ router.get("/auth/callback", async (req, res): Promise<any> => {
     });
   } catch (error) {
     console.error("OAuth callback error:", error);
-    res.status(500).json({ error: "Authentication failed" });
+    const errorMessage = error instanceof Error ? error.message : "Authentication failed due to an unknown error";
+    res.status(500).json({ error: `Authentication failed: ${errorMessage}` });
   }
 });
-
-
 
 // Helper function to get user client
 function getUserClient(loggedUserId: string): TwitterApi | null {
@@ -245,7 +233,6 @@ router.post("/tweet", async (req, res): Promise<any> => {
     } catch (error: any) {
       if (error.response && error.response.status === 401) {
         console.log('Token expired, attempting refresh...');
-        // Attempt to refresh the token
         const newTokens = await refreshTokens(tokens.refreshToken);
         const newClient = new TwitterApi(newTokens.accessToken);
 
