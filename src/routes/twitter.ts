@@ -123,19 +123,28 @@ router.get("/auth/login", (req, res): any => {
   authUrl.searchParams.set("code_challenge", codeChallenge);
   authUrl.searchParams.set("code_challenge_method", "S256");
 
+  // Log the URL for debugging
+  console.log("Auth URL:", authUrl.toString());
+
   res.redirect(authUrl.toString());
 });
+
 
 // Callback handler to process the response from Twitter (first-time authorization)
 router.get("/auth/callback", async (req, res): Promise<any> => {
   const { code, state } = req.query;
+
+  // Log received params for debugging
+  console.log("Received code:", code);
+  console.log("Received state:", state);
+  console.log("Session state:", req.session.state);
+  console.log("Session codeVerifier:", req.session.codeVerifier);
 
   // Ensure state matches the one we sent
   if (!code || !state || state !== req.session.state) {
     return res.status(400).json({ error: "Invalid callback parameters: Mismatched state" });
   }
 
-  // Ensure codeVerifier exists in the session
   const codeVerifier = req.session.codeVerifier;
   if (!codeVerifier) {
     return res.status(400).json({ error: "Code Verifier not found in session" });
@@ -147,9 +156,6 @@ router.get("/auth/callback", async (req, res): Promise<any> => {
       clientSecret: CLIENT_SECRET,
     });
 
-    console.log("Received OAuth code:", code);
-    console.log("Using codeVerifier from session:", codeVerifier);
-
     // Exchange the authorization code for the access token
     const { accessToken, refreshToken } = await client.loginWithOAuth2({
       code: code as string,
@@ -157,8 +163,9 @@ router.get("/auth/callback", async (req, res): Promise<any> => {
       redirectUri: CALLBACK_URL,
     });
 
-    console.log('Access Token:', accessToken);
-    console.log('Refresh Token:', refreshToken);
+    // Log tokens for debugging
+    console.log("Access Token:", accessToken);
+    console.log("Refresh Token:", refreshToken);
 
     if (!accessToken || !refreshToken) {
       return res.status(500).json({ error: "Failed to retrieve tokens" });
@@ -167,7 +174,8 @@ router.get("/auth/callback", async (req, res): Promise<any> => {
     const userClient = new TwitterApi(accessToken);
     const { data: userInfo } = await userClient.v2.me();
 
-    console.log('User Info:', userInfo);
+    // Log user info for verification
+    console.log("User Info:", userInfo);
 
     const tokens = {
       accessToken: accessToken,
@@ -175,8 +183,7 @@ router.get("/auth/callback", async (req, res): Promise<any> => {
       userId: userInfo.id,
     };
 
-    // Write tokens to tokens.json
-    console.log('Saving tokens to tokens.json:', tokens);
+    // Save tokens to tokens.json
     fs.writeFileSync(TOKENS_FILE_PATH, JSON.stringify(tokens), "utf-8");
 
     req.session.loggedUserId = userInfo.id;
@@ -193,6 +200,7 @@ router.get("/auth/callback", async (req, res): Promise<any> => {
     res.status(500).json({ error: `Authentication failed: ${errorMessage}` });
   }
 });
+
 
 // Helper function to get user client
 function getUserClient(loggedUserId: string): TwitterApi | null {

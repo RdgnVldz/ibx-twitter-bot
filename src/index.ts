@@ -11,15 +11,20 @@ const port = process.env.PORT || 3000;
 // Session configuration
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || "your-secret-key",
+    secret: process.env.SESSION_SECRET || "your-secret-key",  // Use a secure key in production
     resave: false,
     saveUninitialized: false,
-    cookie: { secure: false }, // Set to true in production with HTTPS
+    cookie: {
+      secure: process.env.NODE_ENV === 'production',  // Use secure cookies in production only (requires HTTPS)
+      httpOnly: true,  // Prevent client-side access to the cookie
+      maxAge: 3600000, // Session expiry (1 hour)
+    },
   })
 );
 
 app.use(express.json());
 
+// Use the Twitter routes for handling OAuth
 app.use(twitterRouter);
 
 // Error handling middleware
