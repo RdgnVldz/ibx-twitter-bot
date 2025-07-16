@@ -150,14 +150,30 @@ router.get("/auth/callback", async (req, res): Promise<any> => {
       clientSecret: CLIENT_SECRET,
     });
 
+    // Log to debug the OAuth process
+    console.log('Code received from Twitter:', code);
+
+    // Retrieve the access token and refresh token
     const { accessToken, refreshToken } = await client.loginWithOAuth2({
       code: code as string,
       codeVerifier: req.session.codeVerifier!,
       redirectUri: CALLBACK_URL,
     });
 
+    // Log tokens to ensure they are being retrieved correctly
+    console.log('Access Token:', accessToken);
+    console.log('Refresh Token:', refreshToken);
+
+    // Handle case where tokens are not retrieved
+    if (!accessToken || !refreshToken) {
+      return res.status(500).json({ error: "Failed to retrieve tokens" });
+    }
+
     const userClient = new TwitterApi(accessToken);
     const { data: userInfo } = await userClient.v2.me();
+
+    // Log user info for verification
+    console.log('User Info:', userInfo);
 
     const tokens = {
       accessToken: accessToken,
@@ -165,10 +181,14 @@ router.get("/auth/callback", async (req, res): Promise<any> => {
       userId: userInfo.id,
     };
 
+    // Write tokens to tokens.json
+    console.log('Saving tokens to tokens.json:', tokens);
     fs.writeFileSync(TOKENS_FILE_PATH, JSON.stringify(tokens), "utf-8");
 
+    // Store user ID in session for future requests
     req.session.loggedUserId = userInfo.id;
 
+    // Send success response
     res.json({
       success: true,
       message: "Authentication successful",
@@ -180,6 +200,7 @@ router.get("/auth/callback", async (req, res): Promise<any> => {
     res.status(500).json({ error: "Authentication failed" });
   }
 });
+
 
 // Helper function to get user client
 function getUserClient(loggedUserId: string): TwitterApi | null {
