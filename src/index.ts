@@ -11,12 +11,12 @@ const port = process.env.PORT || 3000;
 // Session configuration
 app.use(
   session({
-    secret: process.env.SESSION_SECRET || "your-secret-key",  // Use a secure key in production
+    secret: process.env.SESSION_SECRET || "your-secret-key",  // Use a strong secret key in production
     resave: false,
     saveUninitialized: false,
     cookie: {
-      secure: process.env.NODE_ENV === 'production',  // Use secure cookies in production only (requires HTTPS)
-      httpOnly: true,  // Prevent client-side access to the cookie
+      secure: process.env.NODE_ENV === 'production',  // Set to true only in production
+      httpOnly: true,  // Prevent client-side JavaScript from accessing the cookie
       maxAge: 3600000, // Session expiry (1 hour)
     },
   })

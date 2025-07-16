@@ -108,8 +108,9 @@ router.get("/auth/login", (req, res): any => {
   const codeChallenge = generateCodeChallenge(codeVerifier);
   const state = crypto.randomBytes(16).toString("hex");
 
-  req.session.codeVerifier = codeVerifier;  // Store codeVerifier in session
-  req.session.state = state;  // Store state in session
+  // Store codeVerifier and state in session
+  req.session.codeVerifier = codeVerifier;
+  req.session.state = state;
 
   const authUrl = new URL("https://twitter.com/i/oauth2/authorize");
   authUrl.searchParams.set("response_type", "code");
@@ -123,8 +124,7 @@ router.get("/auth/login", (req, res): any => {
   authUrl.searchParams.set("code_challenge", codeChallenge);
   authUrl.searchParams.set("code_challenge_method", "S256");
 
-  // Log the URL for debugging
-  console.log("Auth URL:", authUrl.toString());
+  console.log("Auth URL:", authUrl.toString()); // Debugging log
 
   res.redirect(authUrl.toString());
 });
@@ -134,7 +134,7 @@ router.get("/auth/login", (req, res): any => {
 router.get("/auth/callback", async (req, res): Promise<any> => {
   const { code, state } = req.query;
 
-  // Log received params for debugging
+  // Log the received params for debugging
   console.log("Received code:", code);
   console.log("Received state:", state);
   console.log("Session state:", req.session.state);
@@ -163,9 +163,8 @@ router.get("/auth/callback", async (req, res): Promise<any> => {
       redirectUri: CALLBACK_URL,
     });
 
-    // Log tokens for debugging
-    console.log("Access Token:", accessToken);
-    console.log("Refresh Token:", refreshToken);
+    console.log('Access Token:', accessToken);
+    console.log('Refresh Token:', refreshToken);
 
     if (!accessToken || !refreshToken) {
       return res.status(500).json({ error: "Failed to retrieve tokens" });
@@ -174,16 +173,14 @@ router.get("/auth/callback", async (req, res): Promise<any> => {
     const userClient = new TwitterApi(accessToken);
     const { data: userInfo } = await userClient.v2.me();
 
-    // Log user info for verification
     console.log("User Info:", userInfo);
 
     const tokens = {
       accessToken: accessToken,
-      refreshToken: refreshToken || "",  
+      refreshToken: refreshToken || "",
       userId: userInfo.id,
     };
 
-    // Save tokens to tokens.json
     fs.writeFileSync(TOKENS_FILE_PATH, JSON.stringify(tokens), "utf-8");
 
     req.session.loggedUserId = userInfo.id;
