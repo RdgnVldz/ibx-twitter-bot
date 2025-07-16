@@ -488,7 +488,7 @@ router.get("/user/:loggedUserId", async (req, res): Promise<any> => {
 router.post("/logout/:loggedUserId", (req, res) => {
   const { loggedUserId } = req.params;
 
-  userTokens.delete(loggedUserId);  
+  userTokens.delete(loggedUserId);
 
   res.json({
     success: true,
