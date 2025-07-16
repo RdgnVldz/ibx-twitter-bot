@@ -108,7 +108,7 @@ router.get("/auth/login", (req, res): any => {
   const codeChallenge = generateCodeChallenge(codeVerifier);
   const state = crypto.randomBytes(16).toString("hex");
 
-  // Store codeVerifier and state in the session
+  // Store state and codeVerifier in session
   req.session.codeVerifier = codeVerifier;
   req.session.state = state;
 
@@ -117,16 +117,13 @@ router.get("/auth/login", (req, res): any => {
   const authUrl = new URL("https://twitter.com/i/oauth2/authorize");
   authUrl.searchParams.set("response_type", "code");
   authUrl.searchParams.set("client_id", CLIENT_ID);
-  authUrl.searchParams.set("redirect_uri", CALLBACK_URL);
-  authUrl.searchParams.set(
-    "scope",
-    "tweet.read tweet.write users.read follows.read follows.write like.read like.write"
-  );
+  authUrl.searchParams.set("redirect_uri", CALLBACK_URL);  
+  authUrl.searchParams.set("scope", "tweet.read tweet.write users.read follows.read follows.write like.read like.write");
   authUrl.searchParams.set("state", state);
   authUrl.searchParams.set("code_challenge", codeChallenge);
   authUrl.searchParams.set("code_challenge_method", "S256");
 
-  console.log("Auth URL:", authUrl.toString()); // Debugging log
+  console.log("Auth URL:", authUrl.toString());  // Debugging log
 
   res.redirect(authUrl.toString());
 });
@@ -139,9 +136,9 @@ router.get("/auth/callback", async (req, res): Promise<any> => {
   // Log received parameters for debugging
   console.log("Received code:", code);
   console.log("Received state:", state);
-  console.log("Session state:", req.session.state);
+  console.log("Session state:", req.session.state);  // Debugging log
 
-  // Ensure the state received in the callback matches the session state
+  // Ensure state matches the one we sent
   if (!code || !state || state !== req.session.state) {
     return res.status(400).json({ error: "Invalid callback parameters: Mismatched state" });
   }
