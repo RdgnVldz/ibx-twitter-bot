@@ -8,23 +8,8 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Session configuration
-app.use(
-  session({
-    secret: process.env.SESSION_SECRET || "your-secret-key",  // Use a strong session secret
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      secure: process.env.NODE_ENV === "production",  // Only secure cookies in production
-      httpOnly: true,  // Prevent client-side JS from accessing the session cookie
-      maxAge: 3600000, // Session expiry (1 hour)
-    },
-  })
-);
-
 app.use(express.json());
 
-// Use the Twitter routes for handling OAuth
 app.use(twitterRouter);
 
 // Error handling middleware

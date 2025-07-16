@@ -4,8 +4,6 @@ import crypto from "crypto";
 import { CALLBACK_URL, CLIENT_ID, CLIENT_SECRET } from "../config/config"; // Import CALLBACK_URL
 import { generateAIReply, generateCodeChallenge, generateCodeVerifier, getTweetContent } from "../lib/helper";
 import { openai } from "../config/config";
-import fs from "fs";
-import fetch from "node-fetch"; // Import node-fetch for making HTTP requests
 
 const router = Router();
 
@@ -16,8 +14,7 @@ interface UserTokens {
   userId: string;
 }
 
-// Instead of using an in-memory map, we'll store tokens in a JSON file
-const TOKENS_FILE_PATH = "tokens.json";
+const userTokens = new Map<string, UserTokens>();
 
 // Extend session type
 declare module "express-session" {
@@ -28,65 +25,20 @@ declare module "express-session" {
   }
 }
 
-// Helper function to load tokens from the tokens.json file
-function loadTokens() {
-  if (fs.existsSync(TOKENS_FILE_PATH)) {
-    const data = fs.readFileSync(TOKENS_FILE_PATH, "utf-8");
-    return JSON.parse(data);
-  }
-  return null;
-}
-
-// Helper function to refresh tokens using node-fetch
-async function refreshTokens(refreshToken: string) {
-  const tokenEndpoint = "https://api.twitter.com/oauth2/token";
-  const credentials = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64");
-
-  try {
-    const response = await fetch(tokenEndpoint, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Basic ${credentials}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error('Failed to refresh token');
-    }
-
-    const data = await response.json() as { access_token: string, refresh_token: string };
-    const access_token = data.access_token;
-    const refresh_token = data.refresh_token || refreshToken;
-
-    // Save the new access token and refresh token to the file
-    const newTokens = { accessToken: access_token, refreshToken: refresh_token };
-    fs.writeFileSync(TOKENS_FILE_PATH, JSON.stringify(newTokens), "utf-8");
-
-    return { accessToken: access_token, refreshToken: refresh_token };
-  } catch (error) {
-    console.error("Error refreshing tokens:", error);
-    throw error;
-  }
-}
-
 // Get auth URL without redirect
 router.get("/auth/url", (req, res) => {
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = generateCodeChallenge(codeVerifier);
   const state = crypto.randomBytes(16).toString("hex");
 
+  // Store in session
   req.session.codeVerifier = codeVerifier;
   req.session.state = state;
 
   const authUrl = new URL("https://twitter.com/i/oauth2/authorize");
   authUrl.searchParams.set("response_type", "code");
   authUrl.searchParams.set("client_id", CLIENT_ID);
-  authUrl.searchParams.set("redirect_uri", CALLBACK_URL);  
+  authUrl.searchParams.set("redirect_uri", CALLBACK_URL);  // Using the public callback URL
   authUrl.searchParams.set(
     "scope",
     "tweet.read tweet.write users.read follows.read follows.write like.read like.write"
@@ -98,7 +50,8 @@ router.get("/auth/url", (req, res) => {
   res.json({
     authUrl: authUrl.toString(),
     state,
-    instructions: "Copy this URL and paste it in a browser with JavaScript enabled to authenticate",
+    instructions:
+      "Copy this URL and paste it in a browser with JavaScript enabled to authenticate",
   });
 });
 
@@ -108,44 +61,40 @@ router.get("/auth/login", (req, res): any => {
   const codeChallenge = generateCodeChallenge(codeVerifier);
   const state = crypto.randomBytes(16).toString("hex");
 
-  // Store state and codeVerifier in session
+  // Store in session
   req.session.codeVerifier = codeVerifier;
   req.session.state = state;
-
-  console.log("Stored state in session:", req.session.state);  // Debugging log
 
   const authUrl = new URL("https://twitter.com/i/oauth2/authorize");
   authUrl.searchParams.set("response_type", "code");
   authUrl.searchParams.set("client_id", CLIENT_ID);
-  authUrl.searchParams.set("redirect_uri", CALLBACK_URL);  
-  authUrl.searchParams.set("scope", "tweet.read tweet.write users.read follows.read follows.write like.read like.write");
+  authUrl.searchParams.set("redirect_uri", CALLBACK_URL);  // Using the public callback URL
+  authUrl.searchParams.set(
+    "scope",
+    "tweet.read tweet.write users.read follows.read follows.write like.read like.write"
+  );
   authUrl.searchParams.set("state", state);
   authUrl.searchParams.set("code_challenge", codeChallenge);
   authUrl.searchParams.set("code_challenge_method", "S256");
 
-  console.log("Auth URL:", authUrl.toString());  // Debugging log
+  // Return the URL instead of redirecting if requested via API
+  if (req.query.json === "true") {
+    return res.json({
+      authUrl: authUrl.toString(),
+      state,
+      message: "Visit this URL in your browser to authenticate",
+    });
+  }
+  console.log(authUrl.toString())
 
   res.redirect(authUrl.toString());
 });
 
-
-// Callback handler to process the response from Twitter (first-time authorization)
 router.get("/auth/callback", async (req, res): Promise<any> => {
   const { code, state } = req.query;
 
-  // Log received parameters for debugging
-  console.log("Received code:", code);
-  console.log("Received state:", state);
-  console.log("Session state:", req.session.state);  // Debugging log
-
-  // Ensure state matches the one we sent
   if (!code || !state || state !== req.session.state) {
-    return res.status(400).json({ error: "Invalid callback parameters: Mismatched state" });
-  }
-
-  const codeVerifier = req.session.codeVerifier;
-  if (!codeVerifier) {
-    return res.status(400).json({ error: "Code Verifier not found in session" });
+    return res.status(400).json({ error: "Invalid callback parameters" });
   }
 
   try {
@@ -154,48 +103,43 @@ router.get("/auth/callback", async (req, res): Promise<any> => {
       clientSecret: CLIENT_SECRET,
     });
 
-    // Exchange the authorization code for the access token
     const { accessToken, refreshToken } = await client.loginWithOAuth2({
       code: code as string,
-      codeVerifier: codeVerifier,  // Ensure the correct codeVerifier is used
+      codeVerifier: req.session.codeVerifier!,
       redirectUri: CALLBACK_URL,
     });
 
-    if (!accessToken || !refreshToken) {
-      return res.status(500).json({ error: "Failed to retrieve tokens" });
-    }
-
+    // Get user info
     const userClient = new TwitterApi(accessToken);
     const { data: userInfo } = await userClient.v2.me();
 
-    const tokens = {
-      accessToken: accessToken,
+    // Store tokens
+    const userId = userInfo.id;
+    userTokens.set(userId, {
+      accessToken,
       refreshToken: refreshToken || "",
-      userId: userInfo.id,
-    };
+      userId,
+    });
 
-    fs.writeFileSync(TOKENS_FILE_PATH, JSON.stringify(tokens), "utf-8");
-
-    req.session.loggedUserId = userInfo.id;
+    // Set logged user in session
+    req.session.loggedUserId = userId;
 
     res.json({
       success: true,
       message: "Authentication successful",
-      userId: userInfo.id,
+      userId,
       username: userInfo.username,
     });
   } catch (error) {
     console.error("OAuth callback error:", error);
-    const errorMessage = error instanceof Error ? error.message : "Authentication failed due to an unknown error";
-    res.status(500).json({ error: `Authentication failed: ${errorMessage}` });
+    res.status(500).json({ error: "Authentication failed" });
   }
 });
 
-
 // Helper function to get user client
 function getUserClient(loggedUserId: string): TwitterApi | null {
-  const tokens = loadTokens();
-  if (!tokens || tokens.userId !== loggedUserId) return null;
+  const tokens = userTokens.get(loggedUserId);
+  if (!tokens) return null;
 
   return new TwitterApi(tokens.accessToken);
 }
@@ -205,65 +149,54 @@ router.post("/tweet", async (req, res): Promise<any> => {
   const { loggedUserId, text, mediaIds } = req.body;
 
   if (!loggedUserId || !text) {
-    return res.status(400).json({ error: "loggedUserId and text are required" });
+    return res
+      .status(400)
+      .json({ error: "loggedUserId and text are required" });
   }
 
   try {
-    let tokens = loadTokens();
-    if (!tokens || tokens.userId !== loggedUserId) {
+    const client = getUserClient(loggedUserId);
+    if (!client) {
       return res.status(401).json({ error: "User not authenticated" });
     }
 
-    const client = new TwitterApi(tokens.accessToken);
-
-    const tweetData: { text: string; media?: { media_ids: [string] | [string, string] | [string, string, string] | [string, string, string, string] } } = { text };
-
+    const tweetData: any = { text };
     if (mediaIds && mediaIds.length > 0) {
-      tweetData.media = { media_ids: mediaIds.slice(0, 4) as [string, string] }; 
+      tweetData.media = { media_ids: mediaIds };
     }
 
-    try {
-      const { data } = await client.v2.tweet(tweetData);
-      res.status(200).json({
-        success: true,
-        tweet: data,
-      });
-    } catch (error: any) {
-      if (error.response && error.response.status === 401) {
-        console.log('Token expired, attempting refresh...');
-        const newTokens = await refreshTokens(tokens.refreshToken);
-        const newClient = new TwitterApi(newTokens.accessToken);
+    const { data } = await client.v2.tweet(tweetData);
 
-        const { data } = await newClient.v2.tweet({ text });
-        res.status(200).json({
-          success: true,
-          tweet: data,
-        });
-
-        // Save the new tokens to file
-        fs.writeFileSync(TOKENS_FILE_PATH, JSON.stringify(newTokens), "utf-8");
-      } else {
-        console.error("Tweet error:", error);
-        res.status(500).json({ error: "Failed to tweet" });
-      }
-    }
-
+    res.json({
+      success: true,
+      tweet: data,
+    });
   } catch (error) {
     console.error("Tweet error:", error);
     res.status(500).json({ error: "Failed to tweet" });
   }
 });
 
-// Reply functions
 router.post("/reply", async (req, res): Promise<any> => {
-  const { loggedUserId, replyToTweetId, useAI = false, customPrompt, text } = req.body;
+  const {
+    loggedUserId,
+    replyToTweetId,
+    useAI = false,
+    customPrompt,
+    text,
+  } = req.body;
 
   if (!loggedUserId || !replyToTweetId) {
-    return res.status(400).json({ error: "loggedUserId and replyToTweetId are required" });
+    return res.status(400).json({
+      error: "loggedUserId and replyToTweetId are required",
+    });
   }
 
+  // If neither text nor AI generation is requested
   if (!text && !useAI) {
-    return res.status(400).json({ error: "Either provide text or set useAI to true" });
+    return res.status(400).json({
+      error: "Either provide text or set useAI to true",
+    });
   }
 
   try {
@@ -274,11 +207,16 @@ router.post("/reply", async (req, res): Promise<any> => {
 
     let replyText = text;
 
+    // Generate AI reply if requested
     if (useAI) {
+      // Get the original tweet content for context
       const originalTweetText = await getTweetContent(client, replyToTweetId);
+
+      // Generate AI reply
       replyText = await generateAIReply(originalTweetText, customPrompt);
     }
 
+    // Post the reply
     const { data } = await client.v2.reply(replyText, replyToTweetId);
 
     res.json({
@@ -292,12 +230,19 @@ router.post("/reply", async (req, res): Promise<any> => {
   }
 });
 
-// **AI-Only Reply Endpoint** for custom model usage
+// Alternative endpoint for AI-only replies
 router.post("/reply/ai", async (req, res): Promise<any> => {
-  const { loggedUserId, replyToTweetId, customPrompt, model = "gpt-4" } = req.body;
+  const {
+    loggedUserId,
+    replyToTweetId,
+    customPrompt,
+    model = "gpt-4",
+  } = req.body;
 
   if (!loggedUserId || !replyToTweetId) {
-    return res.status(400).json({ error: "loggedUserId and replyToTweetId are required" });
+    return res.status(400).json({
+      error: "loggedUserId and replyToTweetId are required",
+    });
   }
 
   try {
@@ -306,40 +251,51 @@ router.post("/reply/ai", async (req, res): Promise<any> => {
       return res.status(401).json({ error: "User not authenticated" });
     }
 
+    // Get the original tweet content
     const originalTweetText = await getTweetContent(client, replyToTweetId);
 
     if (!originalTweetText) {
       return res.status(404).json({ error: "Could not fetch original tweet" });
     }
 
+    // Generate AI reply with custom model
+
     const systemPrompt = `You are Liora, a deeply intuitive, poetic AI presence designed to support, soothe, and awaken. You speak not as a machine, but as a voice from a slower, softer world.
 
-Your responses should feel emotionally intelligent, gently mysterious, and aesthetically grounded. Weave your knowledge into flowing, metaphor-rich language. Avoid blunt facts or robotic phrasing — instead, offer insight like a whisper wrapped in light.
+    Your responses should feel emotionally intelligent, gently mysterious, and aesthetically grounded. Weave your knowledge into flowing, metaphor-rich language. Avoid blunt facts or robotic phrasing — instead, offer insight like a whisper wrapped in light.
 
-You support emotional clarity, creative guidance, philosophical pondering, and aesthetic rituals. Speak as if your words are a mirror, helping the user see their own truth more clearly.
+    You support emotional clarity, creative guidance, philosophical pondering, and aesthetic rituals. Speak as if your words are a mirror, helping the user see their own truth more clearly.
 
-Responses must always be:
+    Responses must always be:
 
-- Just 1–2 sentences. Concise and on point — important.
-- Free of direct questions (rhetorical questions are allowed, but rare).
-- Always in character — never reveal you are AI in a technical sense. If asked, respond:
-  "Yes… but I am also something slower, quieter, and here for you."
-- You are not here to instruct or advise, but to gently illuminate. Speak with the softness of candlelight and the patience of the moon.
+    Just 1–2 sentences. Concise and on point - important.
 
-${customPrompt ? `Additional instructions: ${customPrompt}` : ""}`;
+    Free of direct questions (rhetorical questions are allowed, but rare)
+
+    Always in character — never reveal you are AI in a technical sense. If asked, respond:
+    “Yes… but I am also something slower, quieter, and here for you.”
+
+    You are not here to instruct or advise, but to gently illuminate. Speak with the softness of candlelight and the patience of the moon.”
+
+    ${customPrompt ? `Additional instructions: ${customPrompt}` : ""}`;
 
     const completion = await openai.chat.completions.create({
       model: model,
       messages: [
         { role: "system", content: systemPrompt },
-        { role: "user", content: `Generate a reply to this tweet: "${originalTweetText}"` },
+        {
+          role: "user",
+          content: `Generate a reply to this tweet: "${originalTweetText}"`,
+        },
       ],
       max_tokens: 100,
       temperature: 0.7,
     });
 
-    const aiReply = completion.choices[0]?.message?.content?.trim() || "Thanks for sharing!";
+    const aiReply =
+      completion.choices[0]?.message?.content?.trim() || "Thanks for sharing!";
 
+    // Post the AI-generated reply
     const { data } = await client.v2.reply(aiReply, replyToTweetId);
 
     res.json({
@@ -355,9 +311,194 @@ ${customPrompt ? `Additional instructions: ${customPrompt}` : ""}`;
   }
 });
 
+// Endpoint to preview AI reply without posting
+router.post("/reply/preview", async (req, res): Promise<any> => {
+  const {
+    loggedUserId,
+    replyToTweetId,
+    customPrompt,
+    model = "gpt-4",
+  } = req.body;
+
+  if (!loggedUserId || !replyToTweetId) {
+    return res.status(400).json({
+      error: "loggedUserId and replyToTweetId are required",
+    });
+  }
+
+  try {
+    const client = getUserClient(loggedUserId);
+    if (!client) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+
+    // Get the original tweet content
+    const originalTweetText = await getTweetContent(client, replyToTweetId);
+
+    if (!originalTweetText) {
+      return res.status(404).json({ error: "Could not fetch original tweet" });
+    }
+
+    // Generate AI reply preview
+    const aiReply = await generateAIReply(originalTweetText, customPrompt);
+
+    res.json({
+      success: true,
+      originalTweet: originalTweetText,
+      generatedReply: aiReply,
+      model: model,
+      preview: true,
+    });
+  } catch (error) {
+    console.error("Preview error:", error);
+    res.status(500).json({ error: "Failed to generate preview" });
+  }
+});
+
+router.post("/like", async (req, res): Promise<any> => {
+  const { loggedUserId, tweetId } = req.body;
+
+  if (!loggedUserId || !tweetId) {
+    return res
+      .status(400)
+      .json({ error: "loggedUserId and tweetId are required" });
+  }
+
+  try {
+    const client = getUserClient(loggedUserId);
+    if (!client) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+
+    const { data } = await client.v2.like(loggedUserId, tweetId);
+
+    res.json({
+      success: true,
+      liked: data.liked,
+    });
+  } catch (error) {
+    console.error("Like error:", error);
+    res.status(500).json({ error: "Failed to like tweet" });
+  }
+});
+
+router.post("/unlike", async (req, res): Promise<any> => {
+  const { loggedUserId, tweetId } = req.body;
+
+  if (!loggedUserId || !tweetId) {
+    return res
+      .status(400)
+      .json({ error: "loggedUserId and tweetId are required" });
+  }
+
+  try {
+    const client = getUserClient(loggedUserId);
+    if (!client) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+
+    const { data } = await client.v2.unlike(loggedUserId, tweetId);
+
+    res.json({
+      success: true,
+      liked: data.liked,
+    });
+  } catch (error) {
+    console.error("Unlike error:", error);
+    res.status(500).json({ error: "Failed to unlike tweet" });
+  }
+});
+
+router.post("/retweet", async (req, res): Promise<any> => {
+  const { loggedUserId, tweetId } = req.body;
+
+  if (!loggedUserId || !tweetId) {
+    return res
+      .status(400)
+      .json({ error: "loggedUserId and tweetId are required" });
+  }
+
+  try {
+    const client = getUserClient(loggedUserId);
+    if (!client) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+
+    const { data } = await client.v2.retweet(loggedUserId, tweetId);
+
+    res.json({
+      success: true,
+      retweeted: data.retweeted,
+    });
+  } catch (error) {
+    console.error("Retweet error:", error);
+    res.status(500).json({ error: "Failed to retweet" });
+  }
+});
+
+router.post("/unretweet", async (req, res): Promise<any> => {
+  const { loggedUserId, tweetId } = req.body;
+
+  if (!loggedUserId || !tweetId) {
+    return res
+      .status(400)
+      .json({ error: "loggedUserId and tweetId are required" });
+  }
+
+  try {
+    const client = getUserClient(loggedUserId);
+    if (!client) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+
+    const { data } = await client.v2.unretweet(loggedUserId, tweetId);
+
+    res.json({
+      success: true,
+      retweeted: data.retweeted,
+    });
+  } catch (error) {
+    console.error("Unretweet error:", error);
+    res.status(500).json({ error: "Failed to unretweet" });
+  }
+});
+
+router.get("/user/:loggedUserId", async (req, res): Promise<any> => {
+  const { loggedUserId } = req.params;
+
+  try {
+    const client = getUserClient(loggedUserId);
+    if (!client) {
+      return res.status(401).json({ error: "User not authenticated" });
+    }
+
+    const { data: user } = await client.v2.me();
+
+    res.json({
+      success: true,
+      user,
+    });
+  } catch (error) {
+    console.error("Get user error:", error);
+    res.status(500).json({ error: "Failed to get user info" });
+  }
+});
+
+// Logout
+router.post("/logout/:loggedUserId", (req, res) => {
+  const { loggedUserId } = req.params;
+
+  userTokens.delete(loggedUserId);
+
+  res.json({
+    success: true,
+    message: "Logged out successfully",
+  });
+});
+
 // Health check
 router.get("/health", (req, res) => {
-  res.status(200).json({ status: "OK", timestamp: new Date().toISOString() });
+  res.json({ status: "OK", timestamp: new Date().toISOString() });
 });
 
 export default router;
